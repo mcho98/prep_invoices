@@ -16,12 +16,14 @@ label with the name to its right, holding a "rate $/hr" cell and the rows
 "Homemaking hours", "Personal Care Hours", "Respite hours".
 
 Usage:
-  python prep_invoices.py mock_data.xlsx
+  python prep_invoices.py mock_data.xlsx            # writes output/mock_data.csv
+  python prep_invoices.py mock_data.xlsx --start 20260810 --end 20260820
   python prep_invoices.py mock_data.xlsx -o invoices.csv --invoice-date 2026-08-31 --terms-days 30 --first-invoice-no 1001
 """
 import argparse
 import csv
 import datetime as dt
+import os
 import sys
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -35,6 +37,7 @@ SERVICES = {
 CLIENT_LABEL = "client name"
 RATE_LABEL = "rate $/hr"
 CENT = Decimal("0.01")
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
 HEADER = ["*InvoiceNo", "*Customer", "*InvoiceDate", "*DueDate", "Terms", "Location", "Memo",
           "Item(Product/Service)", "ItemDescription", "ItemQuantity", "ItemRate", "*ItemAmount",
@@ -80,7 +83,7 @@ def find_clients(ws):
             for i, (row, name) in enumerate(starts)]
 
 
-def read_client(ws, name, first_row, last_row, date_columns):
+def read_client(ws, name, first_row, last_row, date_columns, start=None, end=None):
     """Return (rate, [(date, service, hours)]). Exits on a missing rate or bad hours."""
     rate, service_rows = None, {}
     for row in ws.iter_rows(min_row=first_row, max_row=last_row):
@@ -93,6 +96,8 @@ def read_client(ws, name, first_row, last_row, date_columns):
     lines = []
     for row, service in sorted(service_rows.items()):
         for col, day in date_columns:
+            if (start and day < start) or (end and day > end):
+                continue
             cell = ws.cell(row, col)
             if cell.value in (None, "", 0):
                 continue
@@ -105,16 +110,25 @@ def read_client(ws, name, first_row, last_row, date_columns):
     return rate, lines
 
 
+def yyyymmdd(text):
+    try:
+        if len(text) != 8:  # strptime would accept short forms like 2026081
+            raise ValueError
+        return dt.datetime.strptime(text, "%Y%m%d").date()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{text}' is not a valid date; use YYYYMMDD, e.g. 20260815")
+
+
 def fmt(n):
     """Number without trailing zeros (3.5 -> '3.5', 34.03 -> '34.03', 4.0 -> '4')."""
     return f"{n:f}".rstrip("0").rstrip(".") if isinstance(n, Decimal) else f"{n:g}"
 
 
-def build_rows(ws, invoice_date, due_date, terms, first_no):
+def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None):
     date_columns = find_date_columns(ws)
     rows, number = [], first_no
     for name, first, last in find_clients(ws):
-        rate, lines = read_client(ws, name, first, last, date_columns)
+        rate, lines = read_client(ws, name, first, last, date_columns, start, end)
         if not lines:
             print(f"Skipping {name}: no hours.", file=sys.stderr)
             continue
@@ -133,17 +147,27 @@ def build_rows(ws, invoice_date, due_date, terms, first_no):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("workbook")
-    p.add_argument("-o", "--output", default="invoice_import.csv")
+    p.add_argument("-o", "--output",
+                   help="CSV to write (default: output/<workbook name>.csv next to this script)")
     p.add_argument("--invoice-date", type=dt.date.fromisoformat, default=dt.date.today(),
                    help="YYYY-MM-DD (default: today)")
+    p.add_argument("--start", type=yyyymmdd, help="only include days on or after this date (YYYYMMDD)")
+    p.add_argument("--end", type=yyyymmdd, help="only include days on or before this date (YYYYMMDD)")
     p.add_argument("--terms-days", type=int, default=30, help="days until due (default 30; 0 = Due on receipt)")
     p.add_argument("--first-invoice-no", type=int, default=1001)
     args = p.parse_args()
+    if not args.output:
+        stem = os.path.splitext(os.path.basename(args.workbook))[0]
+        args.output = os.path.join(OUTPUT_DIR, stem + ".csv")
 
-    ws = openpyxl.load_workbook(args.workbook).active
+    if args.start and args.end and args.start > args.end:
+        p.error("--start is after --end")
+    ws = openpyxl.load_workbook(args.workbook, data_only=True).active
     due = args.invoice_date + dt.timedelta(days=args.terms_days)
     terms = f"Net {args.terms_days}" if args.terms_days else "Due on receipt"
-    rows = build_rows(ws, args.invoice_date, due, terms, args.first_invoice_no)
+    rows = build_rows(ws, args.invoice_date, due, terms, args.first_invoice_no,
+                      args.start, args.end)
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(HEADER)
