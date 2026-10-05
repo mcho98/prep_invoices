@@ -14,20 +14,13 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt pyinstaller
       - run: python build_app.py
-      - run: choco install innosetup -y --no-progress
-      - run: iscc installer.iss
       - uses: actions/upload-artifact@v4
         with:
           name: PrepInvoices-Windows
-          path: installer/PrepInvoices-Setup.exe
+          path: dist/PrepInvoices.exe
 
   mac:
-    strategy:
-      matrix:
-        include:
-          - { runner: macos-latest, label: Mac-AppleSilicon }
-          - { runner: macos-15-intel, label: Mac-Intel }
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-latest   # Apple Silicon
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,11 +30,11 @@ jobs:
       - name: Make disk image
         run: |
           mkdir dmg && cp -R dist/PrepInvoices.app dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname "Prep Invoices" -srcfolder dmg -ov -format UDZO PrepInvoices-${{ matrix.label }}.dmg
+          hdiutil create -volname "Prep Invoices" -srcfolder dmg -ov -format UDZO PrepInvoices-Mac.dmg
       - uses: actions/upload-artifact@v4
         with:
-          name: PrepInvoices-${{ matrix.label }}
-          path: PrepInvoices-${{ matrix.label }}.dmg
+          name: PrepInvoices-Mac
+          path: PrepInvoices-Mac.dmg
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

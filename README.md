@@ -6,13 +6,13 @@ Turns the monthly timesheet workbook into an invoice-import CSV.
 
 Everything the app needs (Python and openpyxl) is bundled inside it.
 
-- **Windows:** download `PrepInvoices-Setup.exe`, double-click it, and click Next / Install.
-  If Windows says "Windows protected your PC", click **More info**, then **Run anyway**.
-  Afterwards open **Prep Invoices** from the desktop icon or Start menu.
-- **Mac:** download the `.dmg` that matches your Mac (**Mac-AppleSilicon** for M1 or newer,
-  **Mac-Intel** for older ones; Apple menu > About This Mac shows which). Open it and drag
+- **Windows:** download `PrepInvoices.exe` and double-click it. There is nothing to install; keep
+  the file wherever is convenient (e.g. the Desktop). If Windows says "Windows protected your
+  PC", click **More info**, then **Run anyway**. The first start takes a few seconds.
+- **Mac (M1 or newer only):** download `PrepInvoices-Mac.dmg`, open it, and drag
   **PrepInvoices** onto **Applications**. The first time, right-click the app and choose **Open**.
   If macOS still refuses, go to System Settings > Privacy & Security and click **Open Anyway**.
+  Older Intel Macs are not supported.
 
 The app is not code-signed, so these one-time warnings are expected.
 
@@ -23,8 +23,8 @@ saved next to the timesheet; **Show file** opens its folder.
 
 ## Publishing the installers (for the person maintaining this)
 
-The GitHub Actions workflow in `.github/workflows/build.yml` builds the Windows installer and
-both Mac disk images. Push the project to GitHub, then either:
+The GitHub Actions workflow in `.github/workflows/build.yml` builds the Windows exe and
+the Mac disk image. Push the project to GitHub, then either:
 
 - Actions tab > **Build apps** > **Run workflow**, and download the files from the finished run, or
 - tag a release (`git tag v1.0 && git push --tags`) to publish them on the repo's Releases page,
