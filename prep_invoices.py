@@ -144,6 +144,21 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
     return rows
 
 
+def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=None, end=None):
+    """Read the workbook and write the invoice CSV. Returns the number of lines written."""
+    ws = openpyxl.load_workbook(workbook, data_only=True).active
+    due = invoice_date + dt.timedelta(days=terms_days)
+    terms = f"Net {terms_days}" if terms_days else "Due on receipt"
+    rows = build_rows(ws, invoice_date, due, terms, first_no, start, end)
+    os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+    with open(output, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(HEADER)
+        w.writerows(rows)
+    print(f"Wrote {len(rows)} lines to {output}", file=sys.stderr)
+    return len(rows)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("workbook")
@@ -162,17 +177,8 @@ def main():
 
     if args.start and args.end and args.start > args.end:
         p.error("--start is after --end")
-    ws = openpyxl.load_workbook(args.workbook, data_only=True).active
-    due = args.invoice_date + dt.timedelta(days=args.terms_days)
-    terms = f"Net {args.terms_days}" if args.terms_days else "Due on receipt"
-    rows = build_rows(ws, args.invoice_date, due, terms, args.first_invoice_no,
-                      args.start, args.end)
-    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    with open(args.output, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(HEADER)
-        w.writerows(rows)
-    print(f"Wrote {len(rows)} lines to {args.output}", file=sys.stderr)
+    write_invoices(args.workbook, args.output, args.invoice_date, args.terms_days,
+                   args.first_invoice_no, args.start, args.end)
 
 
 if __name__ == "__main__":

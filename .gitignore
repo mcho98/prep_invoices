@@ -1,4 +1,8 @@
+/output/
+/build/
+/dist/
+*.spec
+__pycache__/
 mock_data.xlsx
 sample_invoice_import_preview.pdf
 sample_invoice_import.csv
-/output/
