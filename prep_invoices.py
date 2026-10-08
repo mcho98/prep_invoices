@@ -25,7 +25,6 @@ import csv
 import datetime as dt
 import json
 import os
-import re
 import sys
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -65,12 +64,6 @@ def as_date(value):
     return None
 
 
-def clean_name(value):
-    """Chart name without any text in parentheses, e.g. 'Hown Wong (Berkley)' -> 'Hown Wong'."""
-    text = re.sub(r"[(（][^)）]*[)）]?", "", str(value or ""))
-    return " ".join(text.split())
-
-
 def to_int(value):
     try:
         number = float(value)
@@ -103,7 +96,8 @@ def read_chart(path):
         for row in rows:
             row = list(row) + [None] * (max(cols) + 1 - len(row))
             fam, cli = to_int(row[cols[0]]), to_int(row[cols[1]])
-            name = clean_name(row[cols[2]])
+            name = row[cols[2]]
+            name = str(name).strip() if name is not None else ""
             if fam is not None and cli is not None and name:
                 names.setdefault((fam, cli), name)
     finally:
@@ -251,8 +245,6 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
         if chart is not None:
             if key in chart:
                 name = chart[key]
-                if not name.isascii():
-                    print(f"WARNING: chart name for {sheet_name} still has non-English text: {name}", file=sys.stderr)
             else:
                 print(f"WARNING: family {key[0]} / client {key[1]} ({sheet_name}) is not in the client chart; "
                       f"using the timesheet name.", file=sys.stderr)
