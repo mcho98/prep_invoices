@@ -46,6 +46,7 @@ class App(ttk.Frame):
         self.output_path = None
         self.vars = {
             "workbook": tk.StringVar(),
+            "chart": tk.StringVar(value=prep_invoices.load_chart_path() or ""),
             "output": tk.StringVar(),
             "invoice_date": tk.StringVar(value=dt.date.today().isoformat()),
             "start": tk.StringVar(),
@@ -57,6 +58,7 @@ class App(ttk.Frame):
 
         self.row = 0
         self.file_row("Timesheet (.xlsx)", "workbook", self.pick_workbook)
+        self.file_row("Client chart (.xlsx)", "chart", self.pick_chart)
         self.file_row("Save CSV as", "output", self.pick_output)
         self.field("Invoice date", "invoice_date", "YYYY-MM-DD")
         self.field("First day to include", "start", "YYYY-MM-DD, blank = whole month")
@@ -97,6 +99,12 @@ class App(ttk.Frame):
             stem = os.path.splitext(path)[0]
             self.vars["output"].set(stem + "_invoices.csv")
 
+    def pick_chart(self):
+        path = filedialog.askopenfilename(title="Choose the client chart (Family# Client# Chart)",
+                                          filetypes=[("Excel workbook", "*.xlsx *.xlsm"), ("All files", "*.*")])
+        if path:
+            self.vars["chart"].set(path)
+
     def pick_output(self):
         path = filedialog.asksaveasfilename(title="Save invoice CSV", defaultextension=".csv",
                                             initialfile=os.path.basename(self.vars["output"].get() or "invoices.csv"),
@@ -116,7 +124,15 @@ class App(ttk.Frame):
         self.log.configure(state="disabled")
         self.show_button.configure(state="disabled")
         v = {k: var.get().strip() for k, var in self.vars.items()}
+        if not os.path.isfile(v["chart"]):
+            # Missing from the config, or the file moved: ask for it.
+            if v["chart"]:
+                messagebox.showinfo("Client chart not found", "The saved client chart can't be found. Please choose it again.")
+            self.pick_chart()
+            v["chart"] = self.vars["chart"].get().strip()
         try:
+            if not os.path.isfile(v["chart"]):
+                raise ValueError("Choose the client chart first.")
             if not v["workbook"]:
                 raise ValueError("Choose the timesheet first.")
             if not os.path.isfile(v["workbook"]):
@@ -128,6 +144,7 @@ class App(ttk.Frame):
             if start and end and start > end:
                 raise ValueError("The first day is after the last day.")
             terms, first_no = int(v["terms"]), int(v["first_no"])
+            prep_invoices.save_chart_path(v["chart"])
         except ValueError as e:
             msg = str(e)
             if msg.startswith("invalid literal"):
@@ -139,7 +156,8 @@ class App(ttk.Frame):
         captured = io.StringIO()
         try:
             with contextlib.redirect_stderr(captured):
-                prep_invoices.write_invoices(v["workbook"], v["output"], invoice_date, terms, first_no, start, end)
+                prep_invoices.write_invoices(v["workbook"], v["output"], invoice_date, terms, first_no, start, end,
+                                              v["chart"])
         except SystemExit as e:
             self.write(captured.getvalue())
             self.write(f"Stopped: {e.code}", "error")

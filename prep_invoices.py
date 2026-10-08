@@ -23,7 +23,9 @@ Usage:
 import argparse
 import csv
 import datetime as dt
+import json
 import os
+import re
 import sys
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -38,6 +40,13 @@ CLIENT_LABEL = "client name"
 RATE_LABEL = "rate $/hr"
 CENT = Decimal("0.01")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+
+# config/ folder beside the script (or beside the executable / the .app when packaged with PyInstaller)
+APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+if sys.platform == "darwin" and getattr(sys, "frozen", False) and APP_DIR.endswith(".app/Contents/MacOS"):
+    APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(APP_DIR)))
+CONFIG_FILE = os.path.join(APP_DIR, "config", "prep_invoices.json")
+CHART_SHEET = "Family# Client# Chart"
 
 HEADER = ["*InvoiceNo", "*Customer", "*InvoiceDate", "*DueDate", "Terms", "Location", "Memo",
           "Item(Product/Service)", "ItemDescription", "ItemQuantity", "ItemRate", "*ItemAmount",
@@ -54,6 +63,109 @@ def as_date(value):
     if isinstance(value, dt.date):
         return value
     return None
+
+
+def clean_name(value):
+    """Chart name without any text in parentheses, e.g. 'Hown Wong (Berkley)' -> 'Hown Wong'."""
+    text = re.sub(r"[(（][^)）]*[)）]?", "", str(value or ""))
+    return " ".join(text.split())
+
+
+def to_int(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if number == int(number) else None
+
+
+def read_chart(path):
+    """{(family number, client number): English name} from the client chart workbook.
+
+    The chart is the sheet 'Family# Client# Chart' (or the first sheet if there is none), with a
+    header row containing 'Family #', 'Client #' and 'Name'. Continuation rows are blank.
+    """
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    try:
+        ws = wb[CHART_SHEET] if CHART_SHEET in wb.sheetnames else wb.worksheets[0]
+        rows = ws.iter_rows(values_only=True)
+        cols = None
+        for i, row in enumerate(rows):
+            labels = [norm(v) if isinstance(v, str) else None for v in row]
+            if "family #" in labels and "client #" in labels and "name" in labels:
+                cols = [labels.index(k) for k in ("family #", "client #", "name")]
+                break
+            if i >= 10:
+                break
+        if cols is None:
+            raise ValueError("no header row with 'Family #', 'Client #' and 'Name' in the first 10 rows")
+        names = {}
+        for row in rows:
+            row = list(row) + [None] * (max(cols) + 1 - len(row))
+            fam, cli = to_int(row[cols[0]]), to_int(row[cols[1]])
+            name = clean_name(row[cols[2]])
+            if fam is not None and cli is not None and name:
+                names.setdefault((fam, cli), name)
+    finally:
+        wb.close()
+    if not names:
+        raise ValueError("no family/client rows found")
+    return names
+
+
+def load_chart_path():
+    """Chart path saved in the config file, or None if it is unset or the file is gone."""
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            path = json.load(f).get("chart")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return path if isinstance(path, str) and os.path.isfile(path) else None
+
+
+def save_chart_path(path):
+    try:
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({"chart": os.path.abspath(path)}, f, indent=2)
+    except OSError as e:
+        print(f"Could not save {CONFIG_FILE}: {e}", file=sys.stderr)
+
+
+def ask_for_chart():
+    """Ask for the chart with a file picker (or the terminal if there is no display). None = cancelled."""
+    print("The client chart is not set or can't be found.", file=sys.stderr)
+    title = "Choose the client chart (Family# Client# Chart)"
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        path = filedialog.askopenfilename(title=title, filetypes=[("Excel files", "*.xlsx *.xlsm"),
+                                                                   ("All files", "*.*")])
+        root.destroy()
+    except Exception:
+        try:
+            path = input(f"{title}\nPath: ").strip().strip("\"'")
+        except EOFError:
+            path = ""
+    return path or None
+
+
+def get_chart_path(explicit=None):
+    """--chart if given, else the saved path, else ask (and save the answer). Exits if none."""
+    if explicit:
+        if not os.path.isfile(explicit):
+            sys.exit(f"Client chart not found: {explicit}")
+        save_chart_path(explicit)
+        return explicit
+    path = load_chart_path()
+    if not path:
+        path = ask_for_chart()
+        if not path or not os.path.isfile(path):
+            sys.exit("A client chart is needed to give clients their English names.")
+        save_chart_path(path)
+    return path
 
 
 def find_date_columns(ws):
@@ -78,9 +190,12 @@ def find_clients(ws):
         for cell in row:
             if norm(cell.value) == CLIENT_LABEL:
                 name = ws.cell(cell.row, cell.column + 1).value
-                starts.append((cell.row, str(name).strip() if name else f"(unnamed, row {cell.row})"))
-    return [(name, row, starts[i + 1][0] - 1 if i + 1 < len(starts) else ws.max_row)
-            for i, (row, name) in enumerate(starts)]
+                # Family and client numbers sit two rows above the label: family one column left of it, client in it.
+                key = (to_int(ws.cell(cell.row - 2, cell.column - 1).value) if cell.row > 2 and cell.column > 1 else None,
+                       to_int(ws.cell(cell.row - 2, cell.column).value) if cell.row > 2 else None)
+                starts.append((cell.row, str(name).strip() if name else f"(unnamed, row {cell.row})", key))
+    return [(name, row, starts[i + 1][0] - 1 if i + 1 < len(starts) else ws.max_row, key)
+            for i, (row, name, key) in enumerate(starts)]
 
 
 def read_client(ws, name, first_row, last_row, date_columns, start=None, end=None):
@@ -124,14 +239,23 @@ def fmt(n):
     return f"{n:f}".rstrip("0").rstrip(".") if isinstance(n, Decimal) else f"{n:g}"
 
 
-def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None):
+def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None, chart=None):
     date_columns = find_date_columns(ws)
     rows, number = [], first_no
-    for name, first, last in find_clients(ws):
-        rate, lines = read_client(ws, name, first, last, date_columns, start, end)
+    for sheet_name, first, last, key in find_clients(ws):
+        rate, lines = read_client(ws, sheet_name, first, last, date_columns, start, end)
         if not lines:
-            print(f"Skipping {name}: no hours.", file=sys.stderr)
+            print(f"Skipping {sheet_name}: no hours.", file=sys.stderr)
             continue
+        name = sheet_name
+        if chart is not None:
+            if key in chart:
+                name = chart[key]
+                if not name.isascii():
+                    print(f"WARNING: chart name for {sheet_name} still has non-English text: {name}", file=sys.stderr)
+            else:
+                print(f"WARNING: family {key[0]} / client {key[1]} ({sheet_name}) is not in the client chart; "
+                      f"using the timesheet name.", file=sys.stderr)
         total = Decimal(0)
         for i, (day, service, hours) in enumerate(lines):
             amount = (Decimal(str(hours)) * Decimal(str(rate))).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -144,12 +268,21 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
     return rows
 
 
-def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=None, end=None):
-    """Read the workbook and write the invoice CSV. Returns the number of lines written."""
+def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=None, end=None, chart_path=None):
+    """Read the workbook and write the invoice CSV. Returns the number of lines written.
+
+    chart_path: client chart workbook used to replace timesheet names with the English chart names.
+    """
+    chart = None
+    if chart_path:
+        try:
+            chart = read_chart(chart_path)
+        except Exception as e:
+            sys.exit(f"Could not read the client chart {chart_path}: {e}")
     ws = openpyxl.load_workbook(workbook, data_only=True).active
     due = invoice_date + dt.timedelta(days=terms_days)
     terms = f"Net {terms_days}" if terms_days else "Due on receipt"
-    rows = build_rows(ws, invoice_date, due, terms, first_no, start, end)
+    rows = build_rows(ws, invoice_date, due, terms, first_no, start, end, chart)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     with open(output, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -170,6 +303,8 @@ def main():
     p.add_argument("--end", type=yyyymmdd, help="only include days on or before this date (YYYYMMDD)")
     p.add_argument("--terms-days", type=int, default=30, help="days until due (default 30; 0 = Due on receipt)")
     p.add_argument("--first-invoice-no", type=int, default=1001)
+    p.add_argument("--chart", help="client chart workbook (.xlsx/.xlsm); saved to config/prep_invoices.json. "
+                                   "Default: the saved path, asking for the file if it is missing")
     args = p.parse_args()
     if not args.output:
         stem = os.path.splitext(os.path.basename(args.workbook))[0]
@@ -178,7 +313,7 @@ def main():
     if args.start and args.end and args.start > args.end:
         p.error("--start is after --end")
     write_invoices(args.workbook, args.output, args.invoice_date, args.terms_days,
-                   args.first_invoice_no, args.start, args.end)
+                   args.first_invoice_no, args.start, args.end, get_chart_path(args.chart))
 
 
 if __name__ == "__main__":

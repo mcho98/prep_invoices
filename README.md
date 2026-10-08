@@ -21,6 +21,14 @@ The app is not code-signed, so these one-time warnings are expected.
 Choose the timesheet, adjust the dates if needed, and click **Create invoice CSV**. The CSV is
 saved next to the timesheet; **Show file** opens its folder.
 
+## Client chart (English names)
+
+Customer names on the invoices come from the client chart (`Family# Client# Chart` sheet), matched on
+each client's family and client numbers in the timesheet; text in parentheses is dropped. The chart
+path is saved in `config/prep_invoices.json` next to the app. If it is missing or the file has moved,
+the app asks for it again. From the command line use `--chart FILE.xlsx` to set or change it. A client
+not found in the chart keeps the timesheet name, with a warning.
+
 ## Publishing the installers (for the person maintaining this)
 
 The GitHub Actions workflow in `.github/workflows/build.yml` builds the Windows exe and
