@@ -60,6 +60,10 @@ class App(ttk.Frame):
         self.file_row("Timesheet (.xlsx)", "workbook", self.pick_workbook)
         self.file_row("Client chart (.xlsx)", "chart", self.pick_chart)
         self.file_row("Save CSV as", "output", self.pick_output)
+        ttk.Label(self, text="Blank = next to the timesheet, named date_time_timesheet. "
+                             "An Excel summary is saved beside the CSV.",
+                  foreground="gray").grid(row=self.row, column=1, columnspan=2, sticky="w", padx=8)
+        self.row += 1
         self.field("Invoice date", "invoice_date", "YYYY-MM-DD")
         self.field("First day to include", "start", "YYYY-MM-DD, blank = whole month")
         self.field("Last day to include", "end", "YYYY-MM-DD, blank = whole month")
@@ -96,8 +100,7 @@ class App(ttk.Frame):
                                           filetypes=[("Excel workbook", "*.xlsx *.xlsm"), ("All files", "*.*")])
         if path:
             self.vars["workbook"].set(path)
-            stem = os.path.splitext(path)[0]
-            self.vars["output"].set(stem + "_invoices.csv")
+            self.vars["output"].set("")
 
     def pick_chart(self):
         path = filedialog.askopenfilename(title="Choose the client chart (Family# Client# Chart)",
@@ -108,6 +111,7 @@ class App(ttk.Frame):
     def pick_output(self):
         path = filedialog.asksaveasfilename(title="Save invoice CSV", defaultextension=".csv",
                                             initialfile=os.path.basename(self.vars["output"].get() or "invoices.csv"),
+                                            initialdir=os.path.dirname(self.vars["workbook"].get() or "") or None,
                                             filetypes=[("CSV", "*.csv")])
         if path:
             self.vars["output"].set(path)
@@ -138,7 +142,7 @@ class App(ttk.Frame):
             if not os.path.isfile(v["workbook"]):
                 raise ValueError("That timesheet file was not found.")
             if not v["output"]:
-                raise ValueError("Choose where to save the CSV.")
+                v["output"] = prep_invoices.default_output(v["workbook"])
             invoice_date = parse_date(v["invoice_date"], "Invoice date", required=True)
             start, end = parse_date(v["start"], "First day"), parse_date(v["end"], "Last day")
             if start and end and start > end:
@@ -163,7 +167,7 @@ class App(ttk.Frame):
             self.write(f"Stopped: {e.code}", "error")
             return
         except Exception as e:
-            self.write(f"Could not create the CSV: {e}", "error")
+            self.write(f"Could not create the files: {e}", "error")
             return
         self.write(captured.getvalue())
         self.output_path = v["output"]

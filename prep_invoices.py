@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Turn the timesheet workbook into an invoice-import CSV (same columns as
-sample_invoice_import.csv).
+sample_invoice_import.csv), plus an Excel summary (client name, total hours, total
+amount) to check against after uploading. Both files are named
+<YYYYMMDD>_<HHMMSS>_<timesheet name> and saved next to the timesheet.
 
 One invoice per client. Each day and service with hours becomes one line:
   Customer             = client name (first line of the invoice only)
@@ -16,7 +18,7 @@ label with the name to its right, holding a "rate $/hr" cell and the rows
 "Homemaking hours", "Personal Care Hours", "Respite hours".
 
 Usage:
-  python prep_invoices.py mock_data.xlsx            # writes output/mock_data.csv
+  python prep_invoices.py mock_data.xlsx            # writes <date>_<time>_mock_data.csv and .xlsx next to it
   python prep_invoices.py mock_data.xlsx --start 20260810 --end 20260820
   python prep_invoices.py mock_data.xlsx -o invoices.csv --invoice-date 2026-08-31 --terms-days 30 --first-invoice-no 1001
 """
@@ -29,6 +31,7 @@ import sys
 from decimal import Decimal, ROUND_HALF_UP
 
 import openpyxl
+import openpyxl.styles
 
 SERVICES = {
     "homemaking hours": "Homemaking",
@@ -38,7 +41,6 @@ SERVICES = {
 CLIENT_LABEL = "client name"
 RATE_LABEL = "rate $/hr"
 CENT = Decimal("0.01")
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
 # config/ folder beside the script (or beside the executable / the .app when packaged with PyInstaller)
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -233,9 +235,37 @@ def fmt(n):
     return f"{n:f}".rstrip("0").rstrip(".") if isinstance(n, Decimal) else f"{n:g}"
 
 
+def default_output(workbook):
+    """CSV path next to the timesheet: <YYYYMMDD>_<HHMMSS>_<timesheet name>.csv."""
+    stem = os.path.splitext(os.path.basename(workbook))[0]
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(os.path.dirname(os.path.abspath(workbook)), f"{stamp}_{stem}.csv")
+
+
+def write_summary(path, summary):
+    """Excel file with one row per client: timesheet name, total hours, total amount."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    ws.append(["Client Name", "Total Hours", "Total Amount"])
+    for name, hours, amount in summary:
+        ws.append([name, float(hours), float(amount)])
+    last = len(summary) + 1
+    ws.append(["Total", f"=SUM(B2:B{last})", f"=SUM(C2:C{last})"])
+    for cell in ws[1] + ws[last + 1]:
+        cell.font = openpyxl.styles.Font(bold=True)
+    for row in ws.iter_rows(min_row=2, max_row=last + 1):
+        row[1].number_format = "0.00"
+        row[2].number_format = "#,##0.00"
+    ws.column_dimensions["A"].width = max([12] + [len(str(n)) + 2 for n, _, _ in summary])
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 16
+    wb.save(path)
+
+
 def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None, chart=None):
     date_columns = find_date_columns(ws)
-    rows, number = [], first_no
+    rows, summary, number = [], [], first_no
     for sheet_name, first, last, key in find_clients(ws):
         rate, lines = read_client(ws, sheet_name, first, last, date_columns, start, end)
         if not lines:
@@ -248,20 +278,23 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
             else:
                 print(f"WARNING: family {key[0]} / client {key[1]} ({sheet_name}) is not in the client chart; "
                       f"using the timesheet name.", file=sys.stderr)
-        total = Decimal(0)
+        total = hours_total = Decimal(0)
         for i, (day, service, hours) in enumerate(lines):
             amount = (Decimal(str(hours)) * Decimal(str(rate))).quantize(CENT, rounding=ROUND_HALF_UP)
             total += amount
+            hours_total += Decimal(str(hours))
             head = [number, name, invoice_date.strftime("%d/%m/%Y"), due_date.strftime("%d/%m/%Y"), terms,
                     "", ""] if i == 0 else [number, "", "", "", "", "", ""]
             rows.append(head + [service, day.strftime("%Y-%m-%d"), fmt(hours), fmt(rate), f"{amount:.2f}", ""])
         print(f"Invoice {number}: {name}, {len(lines)} lines, ${total:,.2f}", file=sys.stderr)
+        summary.append((sheet_name, hours_total, total))
         number += 1
-    return rows
+    return rows, summary
 
 
 def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=None, end=None, chart_path=None):
-    """Read the workbook and write the invoice CSV. Returns the number of lines written.
+    """Read the workbook and write the invoice CSV and, beside it, the Excel summary (same name, .xlsx).
+    Returns the number of lines written.
 
     chart_path: client chart workbook used to replace timesheet names with the English chart names.
     """
@@ -274,13 +307,16 @@ def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=N
     ws = openpyxl.load_workbook(workbook, data_only=True).active
     due = invoice_date + dt.timedelta(days=terms_days)
     terms = f"Net {terms_days}" if terms_days else "Due on receipt"
-    rows = build_rows(ws, invoice_date, due, terms, first_no, start, end, chart)
+    rows, summary = build_rows(ws, invoice_date, due, terms, first_no, start, end, chart)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     with open(output, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(HEADER)
         w.writerows(rows)
     print(f"Wrote {len(rows)} lines to {output}", file=sys.stderr)
+    summary_path = os.path.splitext(output)[0] + ".xlsx"
+    write_summary(summary_path, summary)
+    print(f"Wrote summary to {summary_path}", file=sys.stderr)
     return len(rows)
 
 
@@ -288,7 +324,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("workbook")
     p.add_argument("-o", "--output",
-                   help="CSV to write (default: output/<workbook name>.csv next to this script)")
+                   help="CSV to write; the summary uses the same name with .xlsx "
+                        "(default: <date>_<time>_<workbook name>.csv next to the workbook)")
     p.add_argument("--invoice-date", type=dt.date.fromisoformat, default=dt.date.today(),
                    help="YYYY-MM-DD (default: today)")
     p.add_argument("--start", type=yyyymmdd, help="only include days on or after this date (YYYYMMDD)")
@@ -299,8 +336,7 @@ def main():
                                    "Default: the saved path, asking for the file if it is missing")
     args = p.parse_args()
     if not args.output:
-        stem = os.path.splitext(os.path.basename(args.workbook))[0]
-        args.output = os.path.join(OUTPUT_DIR, stem + ".csv")
+        args.output = default_output(args.workbook)
 
     if args.start and args.end and args.start > args.end:
         p.error("--start is after --end")
