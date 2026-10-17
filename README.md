@@ -26,13 +26,18 @@ to check against after uploading. Both are named `date_time_timesheet name`, e.g
 ## Client chart (English names)
 
 Customer names on the invoices come from the client chart (the `Family# Client# Chart` sheet, or the
-first sheet), matched on AHS ID. The timesheet's AHS ID is read from the cell right of the "AHS#"
-label in each client's section (or, if that is empty, the cell next to the client number above "Client
-Name"), and looked up in the chart's `AHS ID#` column. The chart name is used as written, with leading and
-trailing spaces removed.
+first sheet). Each client is matched in this order:
 
-If the client has no AHS ID or it is not in the chart, the timesheet name is used with all numbers and
-Chinese characters removed, and a warning is shown.
+1. **AHS ID.** Read from the cell right of the "AHS#" label in the client's section (or, if that is
+   empty, the cell next to the client number above "Client Name"), and looked up in the chart's `AHS ID#`
+   column.
+2. **Family + client number.** If the AHS ID is missing or not in the chart, the family and client
+   numbers above "Client Name" are looked up in the chart's `Family #` and `Client #` columns. A warning
+   is shown.
+3. **Timesheet name, cleaned.** If neither matches, the timesheet name is used with all numbers and
+   Chinese characters removed, and a warning is shown.
+
+Chart names are used as written, with leading and trailing spaces removed.
 
 The chart path is saved in `config/prep_invoices.json` next to the app. If it is missing or the file
 has moved, the app asks for it again. From the command line use `--chart FILE.xlsx` to set or change it.

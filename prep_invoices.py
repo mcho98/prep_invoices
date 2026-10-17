@@ -6,8 +6,8 @@ amount) to check against after uploading. Both files are named
 have more than 999 data rows it is split into _part1, _part2, ... files, never splitting a client's invoice.
 
 One invoice per client. Each day and service with hours becomes one line:
-  Customer             = client name from the client chart, found by AHS ID (first line of the invoice only);
-                         if not found, the timesheet name without numbers or Chinese characters
+  Customer             = client name from the client chart (first line of the invoice only), found by AHS ID,
+                         else by family + client number, else the timesheet name without numbers or Chinese characters
   Item(Product/Service)= Homemaking / Personal Care / Respite
   ItemDescription      = the date (YYYY-MM-DD)
   ItemQuantity         = hours
@@ -97,10 +97,10 @@ def clean_name(name):
 
 
 def read_chart(path):
-    """{AHS ID: English name} from the client chart workbook.
+    """({AHS ID: English name}, {(family number, client number): English name}) from the client chart.
 
     The chart is the sheet 'Family# Client# Chart' (or the first sheet if there is none), with a
-    header row containing 'AHS ID#' and 'Name'. Continuation rows are blank.
+    header row containing 'AHS ID#', 'Family #', 'Client #' and 'Name'. Continuation rows are blank.
     """
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
@@ -109,26 +109,29 @@ def read_chart(path):
         cols = None
         for i, row in enumerate(rows):
             labels = [norm(v) if isinstance(v, str) else None for v in row]
-            if "ahs id#" in labels and "name" in labels:
-                cols = [labels.index(k) for k in ("ahs id#", "name")]
+            if all(k in labels for k in ("ahs id#", "family #", "client #", "name")):
+                cols = [labels.index(k) for k in ("ahs id#", "family #", "client #", "name")]
                 break
             if i >= 10:
                 break
         if cols is None:
-            raise ValueError("no header row with 'AHS ID#' and 'Name' in the first 10 rows")
-        names = {}
+            raise ValueError("no header row with 'AHS ID#', 'Family #', 'Client #' and 'Name' in the first 10 rows")
+        by_ahs, by_family = {}, {}
         for row in rows:
             row = list(row) + [None] * (max(cols) + 1 - len(row))
             ahs = ahs_key(row[cols[0]])
-            name = row[cols[1]]
+            fam, cli = to_int(row[cols[1]]), to_int(row[cols[2]])
+            name = row[cols[3]]
             name = str(name).strip() if name is not None else ""
-            if ahs and name:
-                names.setdefault(ahs, name)
+            if name and ahs:
+                by_ahs.setdefault(ahs, name)
+            if name and fam is not None and cli is not None:
+                by_family.setdefault((fam, cli), name)
     finally:
         wb.close()
-    if not names:
-        raise ValueError("no AHS ID rows found")
-    return names
+    if not by_ahs and not by_family:
+        raise ValueError("no client rows found")
+    return by_ahs, by_family
 
 
 def load_chart_path():
@@ -212,8 +215,17 @@ def find_clients(ws):
     clients = []
     for i, (row, name) in enumerate(starts):
         last = starts[i + 1][0] - 1 if i + 1 < len(starts) else ws.max_row
-        clients.append((name, row, last, find_ahs(ws, row, last)))
+        clients.append((name, row, last, (find_ahs(ws, row, last), find_family(ws, row))))
     return clients
+
+
+def find_family(ws, label_row):
+    """(family number, client number) two rows above 'Client Name': family one column left of the label, client in it."""
+    for cell in ws[label_row]:
+        if norm(cell.value) == CLIENT_LABEL and label_row > 2 and cell.column > 1:
+            return (to_int(ws.cell(label_row - 2, cell.column - 1).value),
+                    to_int(ws.cell(label_row - 2, cell.column).value))
+    return (None, None)
 
 
 def find_ahs(ws, label_row, last_row):
@@ -306,11 +318,20 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
         if not lines:
             print(f"Skipping {sheet_name}: no hours.", file=sys.stderr)
             continue
-        name = chart.get(key) if chart and key else None
+        ahs, family = key
+        name = None
+        if chart:
+            by_ahs, by_family = chart
+            name = by_ahs.get(ahs) if ahs else None
+            if name is None and None not in family:
+                name = by_family.get(family)
+                if name:
+                    print(f"WARNING: {sheet_name}: AHS ID {ahs or '(none)'} not in the client chart; matched on "
+                          f"family {family[0]} / client {family[1]} instead ({name}).", file=sys.stderr)
         if name is None:
             name = clean_name(sheet_name) or sheet_name
-            why = "has no AHS ID" if not key else f"AHS ID {key} is not in the client chart"
-            print(f"WARNING: {sheet_name} {why}; using the timesheet name without numbers or Chinese characters ({name}).",
+            print(f"WARNING: {sheet_name}: no match in the client chart by AHS ID {ahs or '(none)'} or family/client "
+                  f"{family[0]}/{family[1]}; using the timesheet name without numbers or Chinese characters ({name}).",
                   file=sys.stderr)
         total = hours_total = Decimal(0)
         for i, (day, service, hours) in enumerate(lines):
