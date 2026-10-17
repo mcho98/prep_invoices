@@ -14,6 +14,8 @@ One invoice per client. Each day and service with hours becomes one line:
   ItemRate             = the client's $/hr
   ItemAmount           = hours x rate, rounded to cents
 
+A section named exactly "Office" (any case) is skipped.
+
 Workbook layout: one date row near the top (first date cell starts the month,
 one column per day), then one section per client starting at a "Client Name"
 label with the name to its right, holding a "rate $/hr" cell and the rows
@@ -43,6 +45,7 @@ SERVICES = {
 }
 CLIENT_LABEL = "client name"
 AHS_LABEL = "ahs#"
+OFFICE_NAME = "office"  # a section with exactly this name (any case) is not a client
 RATE_LABEL = "rate $/hr"
 CENT = Decimal("0.01")
 MAX_DATA_ROWS = 999  # QuickBooks allows 1000 rows per upload and may count the header
@@ -314,6 +317,9 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
     date_columns = find_date_columns(ws)
     rows, summary, number = [], [], first_no
     for sheet_name, first, last, key in find_clients(ws):
+        if norm(sheet_name) == OFFICE_NAME:
+            print(f"Skipping {sheet_name}: not a client.", file=sys.stderr)
+            continue
         rate, lines = read_client(ws, sheet_name, first, last, date_columns, start, end)
         if not lines:
             print(f"Skipping {sheet_name}: no hours.", file=sys.stderr)

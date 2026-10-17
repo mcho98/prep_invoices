@@ -42,6 +42,12 @@ Chart names are used as written, with leading and trailing spaces removed.
 The chart path is saved in `config/prep_invoices.json` next to the app. If it is missing or the file
 has moved, the app asks for it again. From the command line use `--chart FILE.xlsx` to set or change it.
 
+## Office
+
+A section whose name is exactly "Office" (any capitals, spaces around it ignored) is not a client: it is
+skipped, with a "Skipping Office" line in the log, whatever its hours, rate or numbers say. Names like
+"Office 2" are treated as normal clients.
+
 ## Large files (QuickBooks 1000-row limit)
 
 QuickBooks accepts at most 1000 rows per CSV upload and it is unclear whether the header counts, so each
