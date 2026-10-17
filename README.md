@@ -25,11 +25,24 @@ to check against after uploading. Both are named `date_time_timesheet name`, e.g
 
 ## Client chart (English names)
 
-Customer names on the invoices come from the client chart (`Family# Client# Chart` sheet), matched on
-each client's family and client numbers in the timesheet; the chart name is used as written, with leading and trailing spaces removed. The chart
-path is saved in `config/prep_invoices.json` next to the app. If it is missing or the file has moved,
-the app asks for it again. From the command line use `--chart FILE.xlsx` to set or change it. A client
-not found in the chart keeps the timesheet name, with a warning.
+Customer names on the invoices come from the client chart (the `Family# Client# Chart` sheet, or the
+first sheet), matched on AHS ID. The timesheet's AHS ID is read from the cell right of the "AHS#"
+label in each client's section (or, if that is empty, the cell next to the client number above "Client
+Name"), and looked up in the chart's `AHS ID#` column. The chart name is used as written, with leading and
+trailing spaces removed.
+
+If the client has no AHS ID or it is not in the chart, the timesheet name is used with all numbers and
+Chinese characters removed, and a warning is shown.
+
+The chart path is saved in `config/prep_invoices.json` next to the app. If it is missing or the file
+has moved, the app asks for it again. From the command line use `--chart FILE.xlsx` to set or change it.
+
+## Large files (QuickBooks 1000-row limit)
+
+QuickBooks accepts at most 1000 rows per CSV upload and it is unclear whether the header counts, so each
+CSV holds at most 999 invoice lines plus the header. If there are more, the output is split into
+`..._part1.csv`, `..._part2.csv`, and so on. A client's invoice is never split between files. The Excel
+summary is still a single file covering everything.
 
 ## Publishing the installers (for the person maintaining this)
 

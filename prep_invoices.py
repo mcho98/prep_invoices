@@ -2,10 +2,12 @@
 """Turn the timesheet workbook into an invoice-import CSV (same columns as
 sample_invoice_import.csv), plus an Excel summary (client name, total hours, total
 amount) to check against after uploading. Both files are named
-<YYYYMMDD>_<HHMMSS>_<timesheet name> and saved next to the timesheet.
+<YYYYMMDD>_<HHMMSS>_<timesheet name> and saved next to the timesheet. If the CSV would
+have more than 999 data rows it is split into _part1, _part2, ... files, never splitting a client's invoice.
 
 One invoice per client. Each day and service with hours becomes one line:
-  Customer             = client name (first line of the invoice only)
+  Customer             = client name from the client chart, found by AHS ID (first line of the invoice only);
+                         if not found, the timesheet name without numbers or Chinese characters
   Item(Product/Service)= Homemaking / Personal Care / Respite
   ItemDescription      = the date (YYYY-MM-DD)
   ItemQuantity         = hours
@@ -27,6 +29,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import sys
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -39,8 +42,10 @@ SERVICES = {
     "respite hours": "Respite",
 }
 CLIENT_LABEL = "client name"
+AHS_LABEL = "ahs#"
 RATE_LABEL = "rate $/hr"
 CENT = Decimal("0.01")
+MAX_DATA_ROWS = 999  # QuickBooks allows 1000 rows per upload and may count the header
 
 # config/ folder beside the script (or beside the executable / the .app when packaged with PyInstaller)
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -74,11 +79,28 @@ def to_int(value):
     return int(number) if number == int(number) else None
 
 
+def ahs_key(value):
+    """AHS ID as a comparable string (586623790.0 and ' 586623790 ' both -> '586623790'), or None if blank."""
+    number = to_int(value)
+    if number is not None:
+        return str(number)
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+NOT_NAME = re.compile(r"[\d\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]+")
+
+
+def clean_name(name):
+    """Timesheet name without digits and Chinese characters, extra spaces collapsed."""
+    return " ".join(NOT_NAME.sub(" ", name).split())
+
+
 def read_chart(path):
-    """{(family number, client number): English name} from the client chart workbook.
+    """{AHS ID: English name} from the client chart workbook.
 
     The chart is the sheet 'Family# Client# Chart' (or the first sheet if there is none), with a
-    header row containing 'Family #', 'Client #' and 'Name'. Continuation rows are blank.
+    header row containing 'AHS ID#' and 'Name'. Continuation rows are blank.
     """
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
@@ -87,25 +109,25 @@ def read_chart(path):
         cols = None
         for i, row in enumerate(rows):
             labels = [norm(v) if isinstance(v, str) else None for v in row]
-            if "family #" in labels and "client #" in labels and "name" in labels:
-                cols = [labels.index(k) for k in ("family #", "client #", "name")]
+            if "ahs id#" in labels and "name" in labels:
+                cols = [labels.index(k) for k in ("ahs id#", "name")]
                 break
             if i >= 10:
                 break
         if cols is None:
-            raise ValueError("no header row with 'Family #', 'Client #' and 'Name' in the first 10 rows")
+            raise ValueError("no header row with 'AHS ID#' and 'Name' in the first 10 rows")
         names = {}
         for row in rows:
             row = list(row) + [None] * (max(cols) + 1 - len(row))
-            fam, cli = to_int(row[cols[0]]), to_int(row[cols[1]])
-            name = row[cols[2]]
+            ahs = ahs_key(row[cols[0]])
+            name = row[cols[1]]
             name = str(name).strip() if name is not None else ""
-            if fam is not None and cli is not None and name:
-                names.setdefault((fam, cli), name)
+            if ahs and name:
+                names.setdefault(ahs, name)
     finally:
         wb.close()
     if not names:
-        raise ValueError("no family/client rows found")
+        raise ValueError("no AHS ID rows found")
     return names
 
 
@@ -186,12 +208,25 @@ def find_clients(ws):
         for cell in row:
             if norm(cell.value) == CLIENT_LABEL:
                 name = ws.cell(cell.row, cell.column + 1).value
-                # Family and client numbers sit two rows above the label: family one column left of it, client in it.
-                key = (to_int(ws.cell(cell.row - 2, cell.column - 1).value) if cell.row > 2 and cell.column > 1 else None,
-                       to_int(ws.cell(cell.row - 2, cell.column).value) if cell.row > 2 else None)
-                starts.append((cell.row, str(name).strip() if name else f"(unnamed, row {cell.row})", key))
-    return [(name, row, starts[i + 1][0] - 1 if i + 1 < len(starts) else ws.max_row, key)
-            for i, (row, name, key) in enumerate(starts)]
+                starts.append((cell.row, str(name).strip() if name else f"(unnamed, row {cell.row})"))
+    clients = []
+    for i, (row, name) in enumerate(starts):
+        last = starts[i + 1][0] - 1 if i + 1 < len(starts) else ws.max_row
+        clients.append((name, row, last, find_ahs(ws, row, last)))
+    return clients
+
+
+def find_ahs(ws, label_row, last_row):
+    """AHS ID of the client section: the cell right of its 'AHS#' label, else the cell right of the client
+    number two rows above 'Client Name'. None if neither has one."""
+    for row in ws.iter_rows(min_row=label_row, max_row=last_row):
+        for cell in row:
+            if norm(cell.value) == AHS_LABEL and ahs_key(ws.cell(cell.row, cell.column + 1).value):
+                return ahs_key(ws.cell(cell.row, cell.column + 1).value)
+    for cell in ws[label_row]:
+        if norm(cell.value) == CLIENT_LABEL and label_row > 2:
+            return ahs_key(ws.cell(label_row - 2, cell.column + 1).value)
+    return None
 
 
 def read_client(ws, name, first_row, last_row, date_columns, start=None, end=None):
@@ -271,13 +306,12 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
         if not lines:
             print(f"Skipping {sheet_name}: no hours.", file=sys.stderr)
             continue
-        name = sheet_name
-        if chart is not None:
-            if key in chart:
-                name = chart[key]
-            else:
-                print(f"WARNING: family {key[0]} / client {key[1]} ({sheet_name}) is not in the client chart; "
-                      f"using the timesheet name.", file=sys.stderr)
+        name = chart.get(key) if chart and key else None
+        if name is None:
+            name = clean_name(sheet_name) or sheet_name
+            why = "has no AHS ID" if not key else f"AHS ID {key} is not in the client chart"
+            print(f"WARNING: {sheet_name} {why}; using the timesheet name without numbers or Chinese characters ({name}).",
+                  file=sys.stderr)
         total = hours_total = Decimal(0)
         for i, (day, service, hours) in enumerate(lines):
             amount = (Decimal(str(hours)) * Decimal(str(rate))).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -290,6 +324,28 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
         summary.append((sheet_name, hours_total, total))
         number += 1
     return rows, summary
+
+
+def split_rows(rows, limit=MAX_DATA_ROWS):
+    """Group rows (one invoice = consecutive rows with the same invoice number) into files of at most
+    `limit` rows without splitting an invoice. An invoice longer than `limit` gets a file to itself."""
+    files, current = [], []
+    invoices = []
+    for row in rows:
+        if invoices and invoices[-1][0][0] == row[0]:
+            invoices[-1].append(row)
+        else:
+            invoices.append([row])
+    for invoice in invoices:
+        if current and len(current) + len(invoice) > limit:
+            files.append(current)
+            current = []
+        current.extend(invoice)
+    if current:
+        files.append(current)
+    if any(len(f) > limit for f in files):
+        print(f"WARNING: one invoice has more than {limit} lines; it is in a file by itself.", file=sys.stderr)
+    return files
 
 
 def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=None, end=None, chart_path=None):
@@ -309,12 +365,16 @@ def write_invoices(workbook, output, invoice_date, terms_days, first_no, start=N
     terms = f"Net {terms_days}" if terms_days else "Due on receipt"
     rows, summary = build_rows(ws, invoice_date, due, terms, first_no, start, end, chart)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-    with open(output, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(HEADER)
-        w.writerows(rows)
-    print(f"Wrote {len(rows)} lines to {output}", file=sys.stderr)
-    summary_path = os.path.splitext(output)[0] + ".xlsx"
+    parts = split_rows(rows) or [[]]
+    stem, ext = os.path.splitext(output)
+    for i, part in enumerate(parts, 1):
+        path = output if len(parts) == 1 else f"{stem}_part{i}{ext}"
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(HEADER)
+            w.writerows(part)
+        print(f"Wrote {len(part)} lines to {path}", file=sys.stderr)
+    summary_path = stem + ".xlsx"
     write_summary(summary_path, summary)
     print(f"Wrote summary to {summary_path}", file=sys.stderr)
     return len(rows)
