@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Turn the timesheet workbook into an invoice-import CSV (same columns as
-sample_invoice_import.csv), plus an Excel summary (client name, total hours, total
+sample_invoice_import.csv), plus an Excel summary (customer name, total hours, total
 amount) to check against after uploading. Both files are named
 <YYYYMMDD>_<HHMMSS>_<timesheet name> and saved next to the timesheet. If the CSV would
 have more than 999 data rows it is split into _part1, _part2, ... files, never splitting a client's invoice.
@@ -293,7 +293,7 @@ def default_output(workbook):
 
 
 def write_summary(path, summary):
-    """Excel file with one row per client: timesheet name, total hours, total amount."""
+    """Excel file with one row per client: invoice customer name, total hours, total amount."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Summary"
@@ -348,7 +348,7 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
                     "", ""] if i == 0 else [number, "", "", "", "", "", ""]
             rows.append(head + [service, day.strftime("%Y-%m-%d"), fmt(hours), fmt(rate), f"{amount:.2f}", ""])
         print(f"Invoice {number}: {name}, {len(lines)} lines, ${total:,.2f}", file=sys.stderr)
-        summary.append((sheet_name, hours_total, total))
+        summary.append((name, hours_total, total))
         number += 1
     return rows, summary
 

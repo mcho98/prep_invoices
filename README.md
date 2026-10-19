@@ -37,7 +37,8 @@ first sheet). Each client is matched in this order:
 3. **Timesheet name, cleaned.** If neither matches, the timesheet name is used with all numbers and
    Chinese characters removed, and a warning is shown.
 
-Chart names are used as written, with leading and trailing spaces removed.
+Chart names are used as written, with leading and trailing spaces removed. The Excel summary's
+`Client Name` column (A) uses the same names as the invoices, so it can be checked against QuickBooks directly.
 
 The chart path is saved in `config/prep_invoices.json` next to the app. If it is missing or the file
 has moved, the app asks for it again. From the command line use `--chart FILE.xlsx` to set or change it.
