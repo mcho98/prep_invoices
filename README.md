@@ -19,7 +19,7 @@ The app is not code-signed, so these one-time warnings are expected.
 ## Using the app
 
 Choose the timesheet, adjust the dates if needed, and click **Create invoice CSV**. The CSV is
-saved next to the timesheet, together with an Excel summary (client name, total hours, total amount)
+saved next to the timesheet, together with an Excel summary (client name, total hours, total amount before and after the credit)
 to check against after uploading. Both are named `date_time_timesheet name`, e.g.
 `20261008_143005_mock_data.csv` and `.xlsx`. **Show file** opens their folder.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn the timesheet workbook into an invoice-import CSV (same columns as
 sample_invoice_import.csv), plus an Excel summary (customer name, total hours, total
-amount) to check against after uploading. Both files are named
+amount before and after the credit) to check against after uploading. Both files are named
 <YYYYMMDD>_<HHMMSS>_<timesheet name> and saved next to the timesheet. If the CSV would
 have more than 999 data rows it is split into _part1, _part2, ... files, never splitting a client's invoice.
 
@@ -13,6 +13,9 @@ One invoice per client. Each day and service with hours becomes one line:
   ItemQuantity         = hours
   ItemRate             = the client's $/hr
   ItemAmount           = hours x rate, rounded to cents
+Each invoice ends with a "Credit" line (quantity 1, rate and amount = minus the sum of the other lines),
+so every customer's invoice total is 0.
+The Credit line's date is the client's last service date.
 
 A section named exactly "Office" (any case) is skipped.
 
@@ -43,6 +46,7 @@ SERVICES = {
     "personal care hours": "Personal Care",
     "respite hours": "Respite",
 }
+CREDIT_ITEM = "Credit"
 CLIENT_LABEL = "client name"
 AHS_LABEL = "ahs#"
 OFFICE_NAME = "office"  # a section with exactly this name (any case) is not a client
@@ -293,23 +297,25 @@ def default_output(workbook):
 
 
 def write_summary(path, summary):
-    """Excel file with one row per client: invoice customer name, total hours, total amount."""
+    """Excel file with one row per client: invoice customer name, total hours, total before and after the credit."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Summary"
-    ws.append(["Client Name", "Total Hours", "Total Amount"])
-    for name, hours, amount in summary:
-        ws.append([name, float(hours), float(amount)])
+    ws.append(["Client Name", "Total Hours", "Total Before Credit", "Total After Credit"])
+    for name, hours, before, after in summary:
+        ws.append([name, float(hours), float(before), float(after)])
     last = len(summary) + 1
-    ws.append(["Total", f"=SUM(B2:B{last})", f"=SUM(C2:C{last})"])
+    ws.append(["Total", f"=SUM(B2:B{last})", f"=SUM(C2:C{last})", f"=SUM(D2:D{last})"])
     for cell in ws[1] + ws[last + 1]:
         cell.font = openpyxl.styles.Font(bold=True)
     for row in ws.iter_rows(min_row=2, max_row=last + 1):
         row[1].number_format = "0.00"
         row[2].number_format = "#,##0.00"
-    ws.column_dimensions["A"].width = max([12] + [len(str(n)) + 2 for n, _, _ in summary])
+        row[3].number_format = "#,##0.00"
+    ws.column_dimensions["A"].width = max([12] + [len(str(n)) + 2 for n, *_ in summary])
     ws.column_dimensions["B"].width = 14
-    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["C"].width = 20
+    ws.column_dimensions["D"].width = 20
     wb.save(path)
 
 
@@ -347,8 +353,11 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
             head = [number, name, invoice_date.strftime("%d/%m/%Y"), due_date.strftime("%d/%m/%Y"), terms,
                     "", ""] if i == 0 else [number, "", "", "", "", "", ""]
             rows.append(head + [service, day.strftime("%Y-%m-%d"), fmt(hours), fmt(rate), f"{amount:.2f}", ""])
-        print(f"Invoice {number}: {name}, {len(lines)} lines, ${total:,.2f}", file=sys.stderr)
-        summary.append((name, hours_total, total))
+        # Credit line cancels the invoice so its grand total is 0.
+        rows.append([number, "", "", "", "", "", "", CREDIT_ITEM, lines[-1][0].strftime("%Y-%m-%d"), "1", fmt(-total), f"{-total:.2f}", ""])
+        print(f"Invoice {number}: {name}, {len(lines)} lines + credit, services ${total:,.2f}, invoice total $0.00",
+              file=sys.stderr)
+        summary.append((name, hours_total, total, total - total))
         number += 1
     return rows, summary
 
