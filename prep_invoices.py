@@ -13,7 +13,7 @@ One invoice per client. Each day and service with hours becomes one line:
   ItemQuantity         = hours
   ItemRate             = the client's $/hr
   ItemAmount           = hours x rate, rounded to cents
-Each invoice ends with a "Credit" line (quantity 1, rate 0 because the rate can't be negative, amount = minus the sum of the other lines),
+Each invoice ends with a "Credit" line (quantity 1, rate = the sum of the other lines, amount = minus that sum),
 so every customer's invoice total is 0.
 The Credit line's date is the client's last service date.
 
@@ -354,7 +354,7 @@ def build_rows(ws, invoice_date, due_date, terms, first_no, start=None, end=None
                     "", ""] if i == 0 else [number, "", "", "", "", "", ""]
             rows.append(head + [service, day.strftime("%Y-%m-%d"), fmt(hours), fmt(rate), f"{amount:.2f}", ""])
         # Credit line cancels the invoice so its grand total is 0.
-        rows.append([number, "", "", "", "", "", "", CREDIT_ITEM, lines[-1][0].strftime("%Y-%m-%d"), "1", "0", f"{-total:.2f}", ""])
+        rows.append([number, "", "", "", "", "", "", CREDIT_ITEM, lines[-1][0].strftime("%Y-%m-%d"), "1", f"{total:.2f}", f"{-total:.2f}", ""])
         print(f"Invoice {number}: {name}, {len(lines)} lines + credit, services ${total:,.2f}, invoice total $0.00",
               file=sys.stderr)
         summary.append((name, hours_total, total, total - total))
